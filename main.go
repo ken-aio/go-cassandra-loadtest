@@ -1,13 +1,14 @@
 package main
 
 import (
-	"crypto/rand"
 	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,13 @@ func main() {
 	flag.Parse()
 	initSess()
 
+	// loadTest()
+	for i := 0; i < 10000; i++ {
+		randomSelect()
+	}
+}
+
+func loadTest() {
 	var sema chan int = make(chan int, *parallelNum)
 	begin := time.Now()
 	var wg sync.WaitGroup
@@ -52,12 +60,13 @@ func main() {
 			debug.FreeOSMemory()
 		}
 		wg.Add(1)
-		go func() {
+		go func(index int) {
 			defer wg.Done()
 			sema <- 1
 			defer func() { <-sema }()
-			load(sema)
-		}()
+			userID := "user" + strconv.Itoa(index/10000)
+			load(sema, userID)
+		}(i)
 	}
 	wg.Wait()
 	end := time.Now()
@@ -81,22 +90,22 @@ func initSess() {
 	}
 }
 
-func load(sema chan int) {
-	code := insert("")
+func load(sema chan int, userID string) {
+	code := insert("", userID)
 	if !*insOnly {
 		selectOne(code)
 		update(code)
 		deleteOne(code)
-		insert(code)
+		insert(code, userID)
 	}
 }
 
-func insert(code string) string {
-	cql := "insert into test(uuid, code, text, is_test, created_at) values(?, ?, ?, ?, ?)"
+func insert(code, userID string) string {
+	cql := "insert into test(uuid, code, user_id, text, is_test, created_at) values(?, ?, ?, ?, ?, ?)"
 	if code == "" {
 		code = generateUID()
 	}
-	if err := sess.Query(cql, gocql.TimeUUID(), code, "test", true, time.Now()).Exec(); err != nil {
+	if err := sess.Query(cql, gocql.TimeUUID(), code, userID, "test", true, time.Now()).Exec(); err != nil {
 		log.Println(err)
 	}
 	return code
@@ -110,6 +119,21 @@ func update(code string) {
 	if t.IsTest {
 		log.Fatal("unexpected is_test = true when after update")
 	}
+}
+
+func randomSelect() {
+	cql := "select * from test.test_by_created_at where user_id = ? limit 100"
+	rand.Seed(time.Now().UnixNano())
+	userID := "user" + strconv.Itoa(rand.Intn(10000))
+	begin := time.Now()
+	iter := sess.Query(cql, userID).Iter()
+	for iter.Scan() {
+	}
+	if err := iter.Close(); err != nil {
+		log.Println(err)
+	}
+	end := time.Now()
+	fmt.Println(end.Sub(begin))
 }
 
 func selectOne(code string) *Test {
