@@ -32,6 +32,7 @@ var sess *gocql.Session
 type Test struct {
 	UUID      string
 	Code      string
+	UserID    string
 	Text      string
 	IsTest    bool
 	CreatedAt time.Time
@@ -44,9 +45,12 @@ func main() {
 	initSess()
 
 	// loadTest()
+	begin := time.Now()
 	for i := 0; i < 10000; i++ {
 		randomSelect()
 	}
+	end := time.Now()
+	fmt.Println(end.Sub(begin))
 }
 
 func loadTest() {
@@ -122,18 +126,21 @@ func update(code string) {
 }
 
 func randomSelect() {
-	cql := "select * from test.test_by_created_at where user_id = ? limit 100"
+	cql := "select code, user_id, created_at from test.test_by_created_at where user_id = ? limit 100"
 	rand.Seed(time.Now().UnixNano())
 	userID := "user" + strconv.Itoa(rand.Intn(10000))
 	begin := time.Now()
+	res := make([]Test, 10000)
+	tmp := &Test{}
 	iter := sess.Query(cql, userID).Iter()
-	for iter.Scan() {
+	for iter.Scan(&tmp.Code, &tmp.UserID, &tmp.CreatedAt) {
+		res = append(res, *tmp)
 	}
 	if err := iter.Close(); err != nil {
 		log.Println(err)
 	}
 	end := time.Now()
-	fmt.Println(end.Sub(begin))
+	fmt.Println(userID, len(res), end.Sub(begin))
 }
 
 func selectOne(code string) *Test {
