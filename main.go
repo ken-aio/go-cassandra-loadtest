@@ -20,6 +20,7 @@ var (
 	dbHosts     = flag.String("h", "localhost", "db host name or ip addr. multi hosts with split ,")
 	dbName      = flag.String("d", "test", "db name")
 	reqNum      = flag.Int("n", 1000, "total request num")
+	insCount    = flag.Int("nn", 1000, "insert count per user")
 	parallelNum = flag.Int("t", 20, "parallel number")
 	isDebug     = flag.Bool("debug", false, "true if debug mode")
 	insOnly     = flag.Bool("ins", false, "true if only insert")
@@ -38,13 +39,57 @@ type Test struct {
 	CreatedAt time.Time
 }
 
-const printNum = 100000
+const printNum = 10000
 
 func main() {
 	flag.Parse()
 	initSess()
 
 	// loadTest()
+	// selectTest()
+	mateViewTest()
+}
+
+func mateViewTest() {
+	userID := "user" + strconv.Itoa(rand.Intn(10000))
+	loopNum := *reqNum / *insCount
+	for i := 0; i < loopNum; i++ {
+		multiInsert(userID)
+		userID = "user" + strconv.Itoa(rand.Intn(10000))
+	}
+	fmt.Printf("insert num = %+v\n", *reqNum)
+}
+
+func multiInsert(userID string) {
+	var sema chan int = make(chan int, *parallelNum)
+	begin := time.Now()
+	var wg sync.WaitGroup
+	for i := 0; i < *insCount; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			sema <- 1
+			defer func() { <-sema }()
+			insert("", userID)
+		}(i)
+	}
+	wg.Wait()
+	end := time.Now()
+	fmt.Println(end.Sub(begin))
+	tableCount := selectByUserID(userID)
+	mateviewCount := selectMateviewByUserID(userID)
+	maxLoopCount := 100
+	for i := 0; i < maxLoopCount; i++ {
+		if tableCount == mateviewCount {
+			break
+		}
+		fmt.Printf("[WARN!!] table /mateview not equal...Re select mateview %s = table: %d, mateview: %d\n", userID, tableCount, mateviewCount)
+		mateviewCount = selectMateviewByUserID(userID)
+	}
+	fmt.Printf("%s = table: %d, mateview: %d\n", userID, tableCount, mateviewCount)
+}
+
+func selectTest() {
 	begin := time.Now()
 	for i := 0; i < 10000; i++ {
 		randomSelect()
@@ -155,6 +200,34 @@ func selectOne(code string) *Test {
 		log.Println(err)
 	}
 	return t
+}
+
+func selectByUserID(userID string) int {
+	cql := "select count(*) from test where user_id = ?"
+	var c int
+	iter := sess.Query(cql, userID).Iter()
+	for iter.Scan(&c) {
+		pp("result: ", c)
+	}
+
+	if err := iter.Close(); err != nil {
+		log.Println(err)
+	}
+	return c
+}
+
+func selectMateviewByUserID(userID string) int {
+	cql := "select count(*) from test_by_created_at where user_id = ?"
+	var c int
+	iter := sess.Query(cql, userID).Iter()
+	for iter.Scan(&c) {
+		pp("result: ", c)
+	}
+
+	if err := iter.Close(); err != nil {
+		log.Println(err)
+	}
+	return c
 }
 
 func deleteOne(code string) {
