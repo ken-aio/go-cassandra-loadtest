@@ -45,9 +45,9 @@ func main() {
 	flag.Parse()
 	initSess()
 
-	// loadTest()
+	loadTest()
 	// selectTest()
-	mateViewTest()
+	// mateViewTest()
 }
 
 func mateViewTest() {
@@ -74,10 +74,16 @@ func multiInsert(userID string) {
 		}(i)
 	}
 	wg.Wait()
+	anyCode := insert("", userID)
+	deleteOne(userID, anyCode)
 	end := time.Now()
 	fmt.Println(end.Sub(begin))
+	tBegin := time.Now()
 	tableCount := selectByUserID(userID)
+	tEnd := time.Now()
+	mBegin := time.Now()
 	mateviewCount := selectMateviewByUserID(userID)
+	mEnd := time.Now()
 	maxLoopCount := 100
 	for i := 0; i < maxLoopCount; i++ {
 		if tableCount == mateviewCount {
@@ -86,7 +92,7 @@ func multiInsert(userID string) {
 		fmt.Printf("[WARN!!] table /mateview not equal...Re select mateview %s = table: %d, mateview: %d\n", userID, tableCount, mateviewCount)
 		mateviewCount = selectMateviewByUserID(userID)
 	}
-	fmt.Printf("%s = table: %d, mateview: %d\n", userID, tableCount, mateviewCount)
+	fmt.Printf("%s = table: %d / %s, mateview: %d / %s\n", userID, tableCount, tEnd.Sub(tBegin), mateviewCount, mEnd.Sub(mBegin))
 }
 
 func selectTest() {
@@ -142,10 +148,15 @@ func initSess() {
 func load(sema chan int, userID string) {
 	code := insert("", userID)
 	if !*insOnly {
-		selectOne(code)
-		update(code)
-		deleteOne(code)
+		selectOne(userID, code)
+		update(userID, code)
+		deleteOne(userID, code)
 		insert(code, userID)
+	}
+	t1 := selectOne(userID, code)
+	t2 := selectOneFromMateview(t1)
+	if t1.Code != t2.Code {
+		fmt.Printf("not match base table and mateview. t1 = %v, t2 = %v\n", t1, t2)
 	}
 }
 
@@ -155,18 +166,19 @@ func insert(code, userID string) string {
 		code = generateUID()
 	}
 	if err := sess.Query(cql, gocql.TimeUUID(), code, userID, "test", true, time.Now()).Exec(); err != nil {
-		log.Println(err)
+		log.Println("insert", err)
 	}
 	return code
 }
 
-func update(code string) {
-	cql := "update test set is_test = false where code = ?"
-	err := sess.Query(cql, code).Exec()
+func update(userID, code string) {
+	cql := "update test set is_test = false where user_id = ? and code = ?"
+	err := sess.Query(cql, userID, code).Exec()
 	fatalIfErr(err)
-	t := selectOne(code)
-	if t.IsTest {
-		log.Fatal("unexpected is_test = true when after update")
+	t := selectOne(userID, code)
+	t2 := selectOneFromMateview(t)
+	if t.IsTest != t2.IsTest {
+		fmt.Printf("unexpected is_test = true when after update. t1 = %v, t2 = %v\n", t, t2)
 	}
 }
 
@@ -188,18 +200,32 @@ func randomSelect() {
 	fmt.Println(userID, len(res), end.Sub(begin))
 }
 
-func selectOne(code string) *Test {
-	cql := "select uuid, code, text, is_test, created_at from test where code = ?"
+func selectOne(userID, code string) *Test {
+	cql := "select uuid, user_id, code, text, is_test, created_at from test where user_id = ? and code = ?"
 	t := &Test{}
-	iter := sess.Query(cql, code).Iter()
-	for iter.Scan(&t.UUID, &t.Code, &t.Text, &t.IsTest, &t.CreatedAt) {
+	iter := sess.Query(cql, userID, code).Iter()
+	for iter.Scan(&t.UUID, &t.UserID, &t.Code, &t.Text, &t.IsTest, &t.CreatedAt) {
 		pp("result: ", t.UUID, t.Code, t.Text, t.IsTest, t.CreatedAt)
 	}
 
 	if err := iter.Close(); err != nil {
-		log.Println(err)
+		log.Println("selectOne", err)
 	}
 	return t
+}
+
+func selectOneFromMateview(t *Test) *Test {
+	cql := "select uuid, code, text, is_test, created_at from test_by_created_at where user_id = ? and created_at = ? and code = ?"
+	tv := &Test{}
+	iter := sess.Query(cql, t.UserID, t.CreatedAt, t.Code).Iter()
+	for iter.Scan(&tv.UUID, &tv.Code, &tv.Text, &tv.IsTest, &tv.CreatedAt) {
+		pp("result: ", tv.UUID, tv.Code, tv.Text, tv.IsTest, tv.CreatedAt)
+	}
+
+	if err := iter.Close(); err != nil {
+		log.Println("selectOneFromMateview", err)
+	}
+	return tv
 }
 
 func selectByUserID(userID string) int {
@@ -230,9 +256,10 @@ func selectMateviewByUserID(userID string) int {
 	return c
 }
 
-func deleteOne(code string) {
-	cql := "delete from test where code = ?"
-	err := sess.Query(cql, code).Exec()
+func deleteOne(userID, code string) {
+	cql := "delete from test where user_id = ? and code = ?"
+	//fmt.Println(cql, userID, code)
+	err := sess.Query(cql, userID, code).Exec()
 	fatalIfErr(err)
 }
 
